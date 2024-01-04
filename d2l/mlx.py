@@ -29,6 +29,7 @@ import gzip
 import pickle
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from copy import deepcopy
 
 
 
@@ -93,6 +94,28 @@ def plot(X, Y=None, xlabel=None, ylabel=None, legend=None, xlim=None,
     set_axes(axes, xlabel, ylabel, xlim, ylim, xscale, yscale, legend)
 
 
+def synthetic_data(w, b, num_examples) -> mx.array:
+    """生成y=Xw+b+噪声
+
+    Defined in :numref:`sec_linear_scratch`"""
+    X = normal(0, 1, (num_examples, len(w)))
+    y = matmul(X, w) + b
+    y += normal(0, 0.01, y.shape)
+    return X, reshape(y, (-1, 1))
+
+
+def load_array(data_arrays, batch_size, is_train=True) -> dx.Buffer:
+    """构造一个PyTorch数据迭代器
+
+    Defined in :numref:`sec_linear_concise`"""
+    def list_data(data_arrays: [mx.array, mx.array]):
+       return [{"X": X, "y": y} for X, y in zip(data_arrays[0], data_arrays[1])]
+
+
+
+    dataset = dx.buffer_from_vector(list_data(data_arrays)).shuffle().batch(batch_size)
+    # dataset = data.TensorDataset(*data_arrays)
+    return dataset
 
 def sgd(params, grads, lr, batch_size):
     """小批量随机梯度下降
@@ -105,25 +128,6 @@ def sgd(params, grads, lr, batch_size):
         # mx.eval(param)
 
     return newparams
-
-
-def load_data_fashion_mnist(batch_size, resize=None):
-    """下载Fashion-MNIST数据集，然后将其加载到内存中
-
-    Defined in :numref:`sec_fashion_mnist`"""
-    trans = [transforms.ToTensor()]
-    if resize:
-        trans.insert(0, transforms.Resize(resize))
-    trans = transforms.Compose(trans)
-    mnist_train = torchvision.datasets.FashionMNIST(
-        root="../data", train=True, transform=trans, download=True)
-    mnist_test = torchvision.datasets.FashionMNIST(
-        root="../data", train=False, transform=trans, download=True)
-    return (data.DataLoader(mnist_train, batch_size, shuffle=True,
-                            num_workers=get_dataloader_workers()),
-            data.DataLoader(mnist_test, batch_size, shuffle=False,
-                            num_workers=get_dataloader_workers()))
-
 
 
 def load_data_fashion_mnist(batch_size, resize=None):
@@ -291,6 +295,7 @@ def train_epoch_ch3(net, train_iter, loss, updater):  #@save
         X, y = mx.array(batch["image"]), mx.array(batch["label"])
         lvalue, grads = loss_and_grad_fn(net, X, y)
         updater.update(net, grads)
+        mx.eval(net.parameters(), updater.state)
         metric.add(lvalue.item(), accuracy(net(X), y), y.size)
     # 返回训练损失和训练精度
     return metric[0] / metric[2], metric[1] / metric[2]
@@ -309,3 +314,22 @@ def train_ch3(net, train_iter, test_iter, loss, num_epochs, updater):  #@save
     assert train_loss < 0.5, train_loss
     assert train_acc <= 1 and train_acc > 0.7, train_acc
     assert test_acc <= 1 and test_acc > 0.7, test_acc
+
+def evaluate_loss(net, data_iter, loss):
+    """评估给定数据集上模型的损失
+
+    Defined in :numref:`sec_model_selection`"""
+    metric = Accumulator(2)  # 损失的总和,样本数量
+    for batch in data_iter:
+        # out = net(X)
+        # y = mx.reshape(y, out.shape)
+        X, y = mx.array(batch["X"]), mx.array(batch["y"])
+        l = loss(net, X, y)
+        metric.add(reduce_sum(l).item(), size(l))
+    return metric[0] / metric[1]
+
+normal = np.random.normal
+matmul = np.matmul
+reshape = np.reshape
+reduce_sum = lambda x, *args, **kwargs: x.sum(*args, **kwargs)
+size = lambda x, *args, **kwargs: x.size
