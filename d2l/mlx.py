@@ -192,20 +192,21 @@ def load_data_fashion_mnist(batch_size, resize=None):
     with train_file.open("rb") as f:
         train_stream = dx.buffer_from_vector(pickle.load(f))\
             .shuffle()\
-            .to_stream()\
-            .key_transform("image", lambda x: x.astype("float32").reshape(-1))\
             .key_transform("image", lambda x: x / 255)\
             .batch(batch_size)
+        # if resize:
+        #     train_stream = train_stream.image_resize("image", resize, resize)
+
         for batch in train_stream:
             train_iter.append(batch)
 
     with test_file.open("rb") as f:
         test_stream = dx.buffer_from_vector(pickle.load(f))\
             .shuffle()\
-            .to_stream()\
-            .key_transform("image", lambda x: x.astype("float32").reshape(-1))\
             .key_transform("image", lambda x: x / 255)\
             .batch(batch_size)
+        # if resize:
+        #     test_stream = test_stream.image_resize("image", resize, resize)
         for batch in test_stream:
             test_iter.append(batch)
 
@@ -282,17 +283,48 @@ def evaluate_accuracy(net, data_iter)-> float:  #@save
 
     return metric[0] / metric[1]
 
+def evaluate_accuracy6(net, data_iter)-> float:  #@save
+    """计算在指定数据集上模型的精度"""
+    metric = Accumulator(2)  # 正确预测数、预测总数
+    for batch in data_iter:
+        X, y = mx.array(batch["image"]), mx.array(batch["label"])
+        B, _ = X.shape
+        X = X.reshape((B, 28, 28, 1))
+        metric.add(accuracy(net(X), mx.array(y)), y.size)
+
+    return metric[0] / metric[1]
+
 def train_epoch_ch3(net, train_iter, loss, updater):  #@save
     """训练模型一个迭代周期（定义见第3章）"""
     # 训练损失总和、训练准确度总和、样本数
     metric = Accumulator(3)
-    loss_fn = lambda model, X, y : mx.mean(loss(model(X), y))
-    # def loss_fun(model, X, y):
-
+    loss_fn = lambda model, X, y : mx.mean(nn.losses.cross_entropy(model(X), y))
+    # print(loss)
     loss_and_grad_fn = nn.value_and_grad(net, loss_fn)
     for batch in train_iter:
         # 计算梯度并更新参数
         X, y = mx.array(batch["image"]), mx.array(batch["label"])
+        # print(X, y)
+        lvalue, grads = loss_and_grad_fn(net, X, y)
+        updater.update(net, grads)
+        mx.eval(net.parameters(), updater.state)
+        metric.add(lvalue.item(), accuracy(net(X), y), y.size)
+    # 返回训练损失和训练精度
+    return metric[0] / metric[2], metric[1] / metric[2]
+
+def train_epoch_ch6(net, train_iter, loss, updater):  #@save
+    """训练模型一个迭代周期（定义见第3章）"""
+    # 训练损失总和、训练准确度总和、样本数
+    metric = Accumulator(3)
+    loss_fn = lambda model, X, y : mx.mean(loss(model(X), y))
+    # print(loss)
+    loss_and_grad_fn = nn.value_and_grad(net, loss_fn)
+    for batch in train_iter:
+        # 计算梯度并更新参数
+        X, y = mx.array(batch["image"]), mx.array(batch["label"])
+        # print(X, y)
+        # B, _= X.shape
+        # X = X.reshape((B, 28, 28, 1))
         lvalue, grads = loss_and_grad_fn(net, X, y)
         updater.update(net, grads)
         mx.eval(net.parameters(), updater.state)
@@ -306,8 +338,24 @@ def train_ch3(net, train_iter, test_iter, loss, num_epochs, updater):  #@save
                         legend=['train loss', 'train acc', 'test acc'])
     for epoch in range(num_epochs):
      
-        train_metrics = train_epoch_ch3(net,  train_iter, loss, updater)
+        train_metrics = train_epoch_ch3(net, train_iter, loss, updater)
         test_acc = evaluate_accuracy(net, test_iter)
+        animator.add(epoch + 1, train_metrics + (test_acc,))
+      
+    train_loss, train_acc = train_metrics
+    assert train_loss < 0.5, train_loss
+    assert train_acc <= 1 and train_acc > 0.7, train_acc
+    assert test_acc <= 1 and test_acc > 0.7, test_acc
+
+
+def train_ch6(net, train_iter, test_iter, loss, num_epochs, updater):  #@save
+    """训练模型（定义见第3章）"""
+    animator = Animator(xlabel='epoch', xlim=[1, num_epochs], ylim=[0.0, 0.9],
+                        legend=['train loss', 'train acc', 'test acc'])
+    for epoch in range(num_epochs):
+     
+        train_metrics = train_epoch_ch6(net, train_iter, loss, updater)
+        test_acc = evaluate_accuracy6(net, test_iter)
         animator.add(epoch + 1, train_metrics + (test_acc,))
       
     train_loss, train_acc = train_metrics
